@@ -1,86 +1,101 @@
+# 1. ముందుగా nano నుండి exit అవ్వండి
+#    Press: Ctrl+X → N (No - save చేయకుండా)
+
+# 2. ఇప్పుడు ఈ పూర్తి code copy చేసి terminal లో paste చేయండి:
+
+cat > main.py << 'EOF'
 from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import models, schemas
-from database import get_db, engine
-from typing import List
+from database import engine, get_db
+from datetime import datetime
 
-# Database tables ni create cheyadam
 models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Student CRUD API - MySQL", version="1.0.0")
+app = FastAPI()
 
-# Server health check
+# CORS middleware for frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins (development only)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
+)
+
 @app.get("/")
-def root():
+def read_root():
     return {"message": "Student CRUD API is running with MySQL Database"}
 
-# ✅ POST - నూతన విద్యార్థిని జోడించండి (Add new student)
-@app.post("/students/", response_model=schemas.StudentResponse, status_code=status.HTTP_201_CREATED)
-def post(student: schemas.StudentCreate, db: Session = Depends(get_db)):
-    # ఈమెయిల్ ఇప్పటికే ఉందో చూడండి
-    db_student = db.query(models.Student).filter(models.Student.email == student.email).first()
-    if db_student:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    db_student = models.Student(**student.dict())
-    db.add(db_student)
-    db.commit()
-    db.refresh(db_student)
-    return db_student
-
-# ✅ GET - అన్ని విద్యార్థులను పొందండి (Get all students)
-@app.get("/students/", response_model=List[schemas.StudentResponse])
-def get(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+@app.get("/students/", response_model=list[schemas.Student])
+def read_students(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     students = db.query(models.Student).offset(skip).limit(limit).all()
     return students
 
-# ✅ GET - ఐడీ ద్వారా ఒక విద్యార్థిని పొందండి (Get student by ID)
-@app.get("/students/{student_id}", response_model=schemas.StudentResponse)
-def get_id(student_id: int, db: Session = Depends(get_db)):
+@app.get("/students/{student_id}", response_model=schemas.Student)
+def read_student(student_id: int, db: Session = Depends(get_db)):
     student = db.query(models.Student).filter(models.Student.id == student_id).first()
     if student is None:
         raise HTTPException(status_code=404, detail="Student not found")
     return student
 
-# ✅ PUT - విద్యార్థి వివరాలను నవీకరించండి (Update student details)
-@app.put("/students/{student_id}", response_model=schemas.StudentResponse)
-def put(student_id: int, student: schemas.StudentUpdate, db: Session = Depends(get_db)):
-    db_student = db.query(models.Student).filter(models.Student.id == student_id).first()
-    if db_student is None:
-        raise HTTPException(status_code=404, detail="Student not found")
+@app.post("/students/", response_model=schemas.Student)
+def create_student(student: schemas.StudentCreate, db: Session = Depends(get_db)):
+    # Check if email already exists
+    db_student = db.query(models.Student).filter(models.Student.email == student.email).first()
+    if db_student:
+        raise HTTPException(status_code=400, detail="Email already registered")
     
-    # ఈమెయిల్ నవీకరిస్తే, అది ఇప్పటికే ఉందో చూడండి
-    if student.email and student.email != db_student.email:
-        existing = db.query(models.Student).filter(models.Student.email == student.email).first()
-        if existing:
-            raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # ఇవి నవీకరించాలి
-    update_data = student.dict(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(db_student, field, value)
-    
+    db_student = models.Student(
+        name=student.name,
+        email=student.email,
+        phone=student.phone,
+        course=student.course,
+        year=student.year,
+        created_at=datetime.now()
+    )
+    db.add(db_student)
     db.commit()
     db.refresh(db_student)
     return db_student
 
-# ✅ DELETE - విద్యార్థిని తొలగించండి (Delete student)
-@app.delete("/students/{student_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete(student_id: int, db: Session = Depends(get_db)):
-    student = db.query(models.Student).filter(models.Student.id == student_id).first()
-    if student is None:
+@app.put("/students/{student_id}", response_model=schemas.Student)
+def update_student(student_id: int, student: schemas.StudentUpdate, db: Session = Depends(get_db)):
+    db_student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    if db_student is None:
         raise HTTPException(status_code=404, detail="Student not found")
     
-    db.delete(student)
+    # Update only provided fields
+    update_data = student.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_student, key, value)
+    
+    db_student.updated_at = datetime.now()
     db.commit()
-    return None
+    db.refresh(db_student)
+    return db_student
 
-# అదనపు: విద్యార్థులను శోధించండి (Search students - Optional)
-@app.get("/students/search/", response_model=List[schemas.StudentResponse])
-def search(name: str = None, course: str = None, db: Session = Depends(get_db)):
-    query = db.query(models.Student)
-    if name:
-        query = query.filter(models.Student.name.ilike(f"%{name}%"))
-    if course:
-        query = query.filter(models.Student.course.ilike(f"%{course}%"))
-    return query.all()
+@app.delete("/students/{student_id}")
+def delete_student(student_id: int, db: Session = Depends(get_db)):
+    db_student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    if db_student is None:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    db.delete(db_student)
+    db.commit()
+    return {"message": "Student deleted successfully"}
+EOF
+
+# 3. Container restart చేయండి
+podman restart student-app
+
+# 4. Test చేయండి
+echo "Testing API..."
+sleep 2
+curl http://localhost:8000/students/
+
+# 5. Web server start చేయండి
+pkill -f "http.server" 2>/dev/null || true
+python3 -m http.server 8080 &
+echo "🌐 Web server: http://localhost:8080/students.html"
