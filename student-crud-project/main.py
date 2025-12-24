@@ -1,101 +1,79 @@
-# 1. ముందుగా nano నుండి exit అవ్వండి
-#    Press: Ctrl+X → N (No - save చేయకుండా)
-
-# 2. ఇప్పుడు ఈ పూర్తి code copy చేసి terminal లో paste చేయండి:
-
-cat > main.py << 'EOF'
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-import models, schemas
-from database import engine, get_db
-from datetime import datetime
+from database import get_db
+from crud import (
+    create_student, get_students, get_student_by_id, 
+    update_student, delete_student, search_students
+)
+from schemas import StudentCreate, StudentUpdate, StudentResponse
+from typing import List, Optional
 
-models.Base.metadata.create_all(bind=engine)
+app = FastAPI(title="Student Management API", version="1.0.0")
 
-app = FastAPI()
-
-# CORS middleware for frontend access
+# CORS settings for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins (development only)
+    allow_origins=["*"],  # For development, restrict in production
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods
-    allow_headers=["*"],  # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
+# Root endpoint
 @app.get("/")
-def read_root():
-    return {"message": "Student CRUD API is running with MySQL Database"}
+def root():
+    return {"message": "Student Management API", "status": "running"}
 
-@app.get("/students/", response_model=list[schemas.Student])
+# Create student
+@app.post("/students/", response_model=StudentResponse, status_code=status.HTTP_201_CREATED)
+def create_student_endpoint(student: StudentCreate, db: Session = Depends(get_db)):
+    return create_student(db, student.dict())
+
+# Get all students
+@app.get("/students/", response_model=List[StudentResponse])
 def read_students(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    students = db.query(models.Student).offset(skip).limit(limit).all()
+    students = get_students(db, skip=skip, limit=limit)
     return students
 
-@app.get("/students/{student_id}", response_model=schemas.Student)
+# Get single student
+@app.get("/students/{student_id}", response_model=StudentResponse)
 def read_student(student_id: int, db: Session = Depends(get_db)):
-    student = db.query(models.Student).filter(models.Student.id == student_id).first()
-    if student is None:
-        raise HTTPException(status_code=404, detail="Student not found")
-    return student
-
-@app.post("/students/", response_model=schemas.Student)
-def create_student(student: schemas.StudentCreate, db: Session = Depends(get_db)):
-    # Check if email already exists
-    db_student = db.query(models.Student).filter(models.Student.email == student.email).first()
-    if db_student:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    db_student = models.Student(
-        name=student.name,
-        email=student.email,
-        phone=student.phone,
-        course=student.course,
-        year=student.year,
-        created_at=datetime.now()
-    )
-    db.add(db_student)
-    db.commit()
-    db.refresh(db_student)
-    return db_student
-
-@app.put("/students/{student_id}", response_model=schemas.Student)
-def update_student(student_id: int, student: schemas.StudentUpdate, db: Session = Depends(get_db)):
-    db_student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    db_student = get_student_by_id(db, student_id)
     if db_student is None:
         raise HTTPException(status_code=404, detail="Student not found")
-    
-    # Update only provided fields
-    update_data = student.dict(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(db_student, key, value)
-    
-    db_student.updated_at = datetime.now()
-    db.commit()
-    db.refresh(db_student)
     return db_student
 
+# Update student
+@app.put("/students/{student_id}", response_model=StudentResponse)
+def update_student_endpoint(
+    student_id: int, 
+    student: StudentUpdate, 
+    db: Session = Depends(get_db)
+):
+    db_student = update_student(db, student_id, student.dict(exclude_unset=True))
+    if db_student is None:
+        raise HTTPException(status_code=404, detail="Student not found")
+    return db_student
+
+# Delete student
 @app.delete("/students/{student_id}")
-def delete_student(student_id: int, db: Session = Depends(get_db)):
-    db_student = db.query(models.Student).filter(models.Student.id == student_id).first()
-    if db_student is None:
+def delete_student_endpoint(student_id: int, db: Session = Depends(get_db)):
+    success = delete_student(db, student_id)
+    if not success:
         raise HTTPException(status_code=404, detail="Student not found")
-    
-    db.delete(db_student)
-    db.commit()
     return {"message": "Student deleted successfully"}
-EOF
 
-# 3. Container restart చేయండి
-podman restart student-app
+# Search students
+@app.get("/students/search/", response_model=List[StudentResponse])
+def search_students_endpoint(
+    name: Optional[str] = None, 
+    course: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    return search_students(db, name=name, course=course)
 
-# 4. Test చేయండి
-echo "Testing API..."
-sleep 2
-curl http://localhost:8000/students/
-
-# 5. Web server start చేయండి
-pkill -f "http.server" 2>/dev/null || true
-python3 -m http.server 8080 &
-echo "🌐 Web server: http://localhost:8080/students.html"
+# Health check
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
