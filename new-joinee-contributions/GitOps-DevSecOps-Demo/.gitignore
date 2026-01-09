@@ -1,0 +1,23 @@
+# Python environment
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Database / backup
+*.db
+*.backup
+*.zip
+
+# VS Code / IDE files
+.vscode/
+.idea/
+
+# System files
+.DS_Store
+*.log
+*.txt
+Downloads/
+AppData/
+OneDrive/
